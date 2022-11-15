@@ -1,0 +1,178 @@
+---
+title: "cross_validation"
+author: "Alana Ferris"
+date: "2022-11-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(modelr)
+library(mgcv)
+
+set.seed(1)
+```
+
+# final project tips
+- commit and then pull and then push --> as a way to figure out the conflicts and then put stuff back online to avoid major catastrophes 
+- and stay in touch and be clear who is working on what at the same time 
+- can change our proposal, it is not binding 
+
+# hw 5 problem 2
+- figure out what need to do for one city -- to get estimated proportions and confidence interval and iterate across cities 
+- can always start with a for loop --> construct an output list then iterate across a collection of dataframes, each time 
+- if have the inside of a for loop and inputting one dataframe each time, extracting function 
+- i am mapping across this thing and doing this every time
+- map inside mutate statement to create a tidy dataframe 
+
+# hw 5 problem 3
+- put the t.test in the function 
+- go to simulations lecture and see what we can copy and paste 
+- collection of paramters trying to vary between simulations and we want to keep track of iterations for each of those, want to map across sample size column the simulate mean and sd function 
+-- this said given sample size with true mean and sd return the est. mean and sd 
+-- do this a bunch, unnest, see dataframe 
+-- this is the starting point
+- not changing sample size but true mean 
+
+```{r}
+sample = rnorm(30, mean = 0)
+
+test_results = t.test(sample)
+
+test_results %>% 
+  broom::tidy()
+
+# now need to wrap this function up where can change the mean 
+
+sim_t_test = function(true_mean){
+ 
+   test_results = t.test(sample)
+  
+  test_results %>% 
+  broom::tidy()
+
+}
+
+# then come back to the expand grid part of class notes, iterate across collection of true mean values 
+# make sure to keep track of estimate and p value 
+
+```
+
+- why make simulation in the first place --> to avoid publication bias so you're  not just seeing significant ps every time, to see the truth better
+- we can do a simulation to see how publication bias plays out in real life and why we need to be skeptical of reported results in the literature 
+
+# Step 1 
+
+```{r}
+nonlin_df = 
+  tibble(
+    id = 1:100,
+    x = runif(100, 0, 1),
+    y = 1 - 10 * (x - .3) ^ 2 + rnorm(100, 0, .3)
+  )
+
+nonlin_df %>% 
+  ggplot(aes(x = x, y = y)) + 
+  geom_point()
+```
+- next model to fit that tries to capture some degree of nonlinearity 
+- bc linear model wont be complex enough
+- smooth one has right amount of complexity and fit...?
+- no easy test to decide which model
+
+# Let's get this by hand 
+
+- training data: 80% of data started with
+- testing data is everything else 
+
+```{r}
+train_df = sample_n(nonlin_df, 80)
+
+test_df = anti_join(nonlin_df, train_df, by = "id")
+```
+
+- `anti_join` anything that is in this dataframe that isn't in the other--> here anything that wasn't in training dataset 
+
+```{r}
+train_df %>% 
+ggplot(aes(x = x, y = y)) + 
+  geom_point() +
+  geom_point(data = test_df, color = "red")
+  
+```
+## Let's try to fit three models on training data
+
+```{r}
+linear_mod = lm(y ~ x, data = train_df)
+smooth_mod = mgcv::gam(y ~ s(x), data = train_df)
+wiggly_mod = mgcv::gam(y ~ s(x, k = 30), sp = 10e-6, data = train_df)
+```
+
+- mgcv does smooth fits 
+
+### results
+
+- in `add_predictions` input the different models you coded above
+
+```{r}
+train_df %>% 
+  add_predictions(wiggly_mod) %>% 
+  ggplot(aes(x = x, y = y)) +
+  geom_point() +
+  geom_line(aes(y = pred), color = "red")
+```
+
+Let's make predictions and compute RMSEs
+
+- add predictions to testing model
+
+```{r}
+rmse(linear_mod, test_df)
+rmse(smooth_mod, test_df)
+rmse(wiggly_mod, test_df)
+```
+
+- RMSEs = prediction error so lower prediction error means prediction is more accurate 
+- we want to test this multiple times to see if this is the "truth"
+
+## Can we iterate?
+
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df, 100)
+
+cv_df %>% pull(train) %>% .[[1]] %>% as_tibble
+```
+
+- by default it should do 20% in testing dataset, 80% in training 
+- pulling out first thing in dataframe and making it a list 
+- in the end we are just trying to keep track of everything 
+
+- in each training dataset want to fit linear model and get the RMSE..?
+- in first mutate, want to convert resamples to tibbles(dataframes)
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  ) 
+```
+
+- what need to do now is add a column to datagrame that contains result of fitting lin model to train test
+then another and another fit to the train dataset 
+- and do this by mapping over training dataset --> give me the first entry of the column and apply the function and so on
+```{r}
+cv_df = 
+  crossv_mc(nonlin_df, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  ) %>% 
+  mutate(
+    linear_fits = map(.x = train, ~lm(y ~ x, data = .x))
+  )
+```
+- put .x to refer to the column entries bc it originally thinks the first entry should be an equation 
